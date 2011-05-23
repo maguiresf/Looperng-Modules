@@ -1,0 +1,153 @@
+#!/usr/bin/perl
+#
+# Looper - Queues and Pipes for the layman
+# ZenOSS output module.
+#
+# Copyright (c) Sean Maguire 2011
+# 
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, 
+# Boston, MA  02111-1307, USA.
+#
+# Send bug-reports, comments, women to maguiresf@googlemail.com
+#
+# Revision 1.0  2011/05/23 16:15:00  smaguire
+# - Initial Commit
+#
+
+BEGIN {
+    our $HOMEDIR = $ENV{LOOPER_HOME} || "/opt/local/looper";
+    $HOMEDIR =~ m/(.+)/;
+
+    push @INC, "$1/libs";
+}
+
+use Scalar::Util qw(blessed);
+use RPC::XML;
+use RPC::XML::Client;
+use looper::logger;
+
+my %tokenVals;
+
+my %configVals = (
+    server      => '',
+    username    => '',
+    password    => '',
+    debugname   => 'zenoss_out',
+    debugmessages   => "/tmp/zenoss_out.log",
+    debugmode   => 3,
+);
+
+my $logopen = 0;
+my $logger = new looper::logger;
+$logger->loglevel ($configVals{debugmode});
+$logger->logname ($configVals{debugname});
+
+# Event Loop
+while (<STDIN>) {
+
+        chomp $_;
+
+        m/^#::configure$/i && (configThis(), next);
+        m/^#::go$/i && (spitOut(), next);
+        m/^#::quit$/i && last;
+
+        (my $token, my $val) = split /\s*=\s*/, $_, 2;
+        $tokenVals{$token} = $val;
+}
+
+quit();
+
+sub quit
+{
+    endZenoss();
+    $logger->logthis (0, "Exiting.");
+    $logger->closelog();
+    exit (0);
+}
+
+sub startZenoss
+{
+    print STDERR "zenoss_out: running: logging to $configVals{debugmessages}\n";
+
+    my ($server, $username, $password) = (
+        $configVals{server},
+        $configVals{username},
+        $configVals{password},
+    );
+
+    $configVals{zenoss} = RPC::XML::Client->new(
+      "http://$username:$password\@$server:8080/zport/dmd/ZenEventManager");
+}
+
+sub endZenoss
+{
+    $configVals{zenoss} = undef;
+}
+
+sub configThis
+{
+    if ($logopen){
+        $logger->logthis ("Configuring.");
+        endZenoss();
+        $logger->closelog();
+    }
+
+    $configVals{$_} = $tokenVals{$_} for (keys %tokenVals);
+
+    startZenoss();
+
+    $logger->filename ($configVals{debugmessages});
+    $logger->loglevel ($configVals{debugmode});
+    $logger->logname ($configVals{debugname});
+    $logger->openlog(), $logopen=1, $logger->logthis (0,
+      "zenoss_out running with PID $$");
+
+    %tokenVals = ();
+}
+
+sub spitOut
+{
+    $logger->logthis (3, "Sending event to ZenOSS.");
+
+    my %evt = (
+        device      => $tokenVals{device},
+        component   => $tokenVals{component},
+        summary     => $tokenVals{summary},
+        severity    => $tokenVals{severity},
+        eventClass  => $tokenVals{eventClass},
+    );
+
+    my $args = RPC::XML::struct->new(%evt);
+
+    my $resp = $configVals{zenoss}->send_request('sendEvent', $args);
+
+
+    if (!blessed($resp)){
+        $logger->logthis(3, "Failed to send event to zenoss: $resp");
+        return;
+    }elsif (blessed($resp) eq 'RPC::XML::fault') { 
+        my $errmsg = join "\n ", map { "\t$_ : " . ${$resp->value}{$_} } keys %{$resp->value};
+        $logger->logthis(3, "Failed to send event to zenoss: $errmsg");
+        return;
+    }elsif (blessed($resp) eq 'RPC::XML::struct') {
+        #Everything is good!
+        #%results = %{$resp->value};
+        $logger->logthis(3, "Sucessfully sent event to zenoss");
+        return;
+    }
+    #Everything is probably good if we are here
+    $logger->logthis(3, "Sucessfully sent event to zenoss");
+}
+

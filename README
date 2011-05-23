@@ -1,0 +1,6 @@
+Looperng-Modules
+
+Collection of modules for looper-ng
+
+zenoss_out:
+    Send events to ZenOSS using RPC::XML and sendEvent
