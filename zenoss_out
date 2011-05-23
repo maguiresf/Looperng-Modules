@@ -56,7 +56,6 @@ $logger->logname ($configVals{debugname});
 
 # Event Loop
 while (<STDIN>) {
-
         chomp $_;
 
         m/^#::configure$/i && (configThis(), next);
